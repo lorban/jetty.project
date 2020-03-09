@@ -1378,6 +1378,11 @@ public class HttpChannelState
                     }
                     break;
 
+                case IDLE:
+                case READY:
+                case REGISTER:
+                    break;
+
                 default:
                     throw new IllegalStateException(toStringLocked());
             }

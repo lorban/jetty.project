@@ -74,6 +74,7 @@ public class HTTP2Stream extends IdleTimeout implements IStream, Callback, Dumpa
     private boolean remoteReset;
     private long dataLength;
     private long dataDemand;
+    private Throwable failure;
     private boolean dataInitial;
     private boolean dataProcess;
 
@@ -197,7 +198,8 @@ public class HTTP2Stream extends IdleTimeout implements IStream, Callback, Dumpa
     {
         try (AutoLock l = lock.lock())
         {
-            dataDemand = Long.MIN_VALUE;
+            dataDemand = 0;
+            failure = x;
             while (true)
             {
                 DataEntry dataEntry = dataQueue.poll();
@@ -373,10 +375,10 @@ public class HTTP2Stream extends IdleTimeout implements IStream, Callback, Dumpa
         DataEntry entry = new DataEntry(frame, callback);
         try (AutoLock l = lock.lock())
         {
-            if (dataDemand == Long.MIN_VALUE)
+            if (failure != null)
             {
                 // stream has been failed
-                callback.failed(null);
+                callback.failed(failure);
                 return;
             }
             dataQueue.offer(entry);
@@ -418,7 +420,7 @@ public class HTTP2Stream extends IdleTimeout implements IStream, Callback, Dumpa
         boolean proceed = false;
         try (AutoLock l = lock.lock())
         {
-            if (dataDemand == Long.MIN_VALUE)
+            if (failure != null)
                 return; // stream has been failed
             demand = dataDemand = MathUtils.cappedAdd(dataDemand, n);
             if (!dataProcess)
