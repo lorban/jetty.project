@@ -55,10 +55,10 @@ public class HttpInputOverHTTP2 extends AbstractLockedHttpInput
     @Override
     protected void produceRawContent()
     {
-        if (!_producing)
+//        if (!_producing)
         {
             _producing = true;
-            ((HttpChannelOverHTTP2)_channelState.getHttpChannel()).getStream().demand(1);
+            ((HttpChannelOverHTTP2)_channelState.getHttpChannel()).fetchContent();
         }
     }
 

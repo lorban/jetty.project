@@ -108,7 +108,7 @@ public abstract class AbstractHttpInput extends HttpInput
         _contentProducer.addContent(content);
         if (isAsync())
             return _channelState.onContentAdded();
-        unblock();
+        //unblock();
         return false;
     }
 

@@ -58,6 +58,9 @@ public class HttpChannelOverHTTP2 extends HttpChannel implements Closeable, Writ
     private boolean _expect100Continue;
     private boolean _delayedUntilContent;
     private boolean _useOutputDirectByteBuffers;
+    private final ThreadLocal<Boolean> syncFetchContentTl = new ThreadLocal<>();
+    private HttpInput.Content _content;
+    private boolean endStream;
 
     public HttpChannelOverHTTP2(Connector connector, HttpConfiguration configuration, EndPoint endPoint, HttpTransportOverHTTP2 transport)
     {
@@ -267,7 +270,24 @@ public class HttpChannelOverHTTP2 extends HttpChannel implements Closeable, Writ
 
         ByteBuffer buffer = frame.getData();
         int length = buffer.remaining();
-        boolean handle = onContent(new HttpInput.Content(buffer)
+
+        endStream = frame.isEndStream();
+
+        if (LOG.isDebugEnabled())
+        {
+            LOG.debug("HTTP2 Request #{}/{}: {} bytes of content",
+                    stream.getId(),
+                    Integer.toHexString(stream.getSession().hashCode()),
+                    length);
+        }
+
+        boolean wasDelayed = _delayedUntilContent;
+        _delayedUntilContent = false;
+
+        if (_content != null)
+            throw new AssertionError("content cannot be queued");
+
+        _content = new HttpInput.Content(buffer)
         {
             @Override
             public void succeeded()
@@ -286,29 +306,66 @@ public class HttpChannelOverHTTP2 extends HttpChannel implements Closeable, Writ
             {
                 return callback.getInvocationType();
             }
-        });
+        };
+        if (getState().isAsync())
+        {
+            boolean handle = !Boolean.TRUE.equals(syncFetchContentTl.get()) && getState().onReadPossible();
+            return  handle || wasDelayed ? this : null;
+        }
+        else
+        {
+            getRequest().getHttpInput().unblock();
+            return wasDelayed ? this : null;
+        }
+    }
 
-        boolean endStream = frame.isEndStream();
+
+    void fetchContent()
+    {
+        // HttpInputOverHttp2 calls this method via produceRawContent;
+        // this is the equivalent of Http1 parseAndFill().
+
+        if (_content != null)
+        {
+            onContent(_content);
+            _content = null;
+        }
+        else
+        {
+            HttpInput.Content copy = null;
+            synchronized (this)
+            {
+
+                // The following must be atomic.
+                syncFetchContentTl.set(Boolean.TRUE);
+                try
+                {
+                    getStream().demand(1);
+                }
+                finally
+                {
+                    syncFetchContentTl.remove();
+                }
+                if (_content != null)
+                {
+                    copy = _content;
+                    _content = null;
+                }
+            }
+            if (copy != null)
+            {
+                onContent(copy);
+            }
+        }
+
         if (endStream)
         {
             boolean handleContent = onContentComplete();
             boolean handleRequest = onRequestComplete();
-            handle |= handleContent | handleRequest;
+//            handle |= handleContent | handleRequest;
+            endStream = false;
         }
 
-        if (LOG.isDebugEnabled())
-        {
-            LOG.debug("HTTP2 Request #{}/{}: {} bytes of {} content, handle: {}",
-                    stream.getId(),
-                    Integer.toHexString(stream.getSession().hashCode()),
-                    length,
-                    endStream ? "last" : "some",
-                    handle);
-        }
-
-        boolean wasDelayed = _delayedUntilContent;
-        _delayedUntilContent = false;
-        return handle || wasDelayed ? this : null;
     }
 
     @Override
